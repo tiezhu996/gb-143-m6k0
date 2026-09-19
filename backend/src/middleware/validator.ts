@@ -71,6 +71,7 @@ export const volunteerUpdateSchema = Joi.object({
 
 export const complaintSchema = Joi.object({
   volunteer_id: Joi.string().uuid().required(),
+  service_record_id: Joi.string().uuid().required(),
   complaint_type: Joi.string().valid(
     'no_show', 'poor_attitude', 'violation', 'misconduct', 'other'
   ).required(),
@@ -81,7 +82,6 @@ export const complaintSchema = Joi.object({
 export const handleComplaintSchema = Joi.object({
   action: Joi.string().valid('resolve', 'reject').required(),
   resolution: Joi.string().min(5).required(),
-  severity: Joi.number().integer().min(1).max(3).default(1),
 });
 
 export const adjustPointsSchema = Joi.object({

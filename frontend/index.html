@@ -8,10 +8,17 @@
       body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #18202a; }
       main { max-width: 920px; margin: 0 auto; padding: 48px 24px; }
       h1 { margin: 0 0 12px; font-size: 32px; }
+      h2 { margin: 0 0 12px; font-size: 20px; }
       p { line-height: 1.7; }
       .panel { margin-top: 24px; padding: 20px; border: 1px solid #d9dee7; border-radius: 8px; background: #fff; }
       .status { font-weight: 700; color: #116b45; }
       pre { overflow: auto; padding: 16px; background: #101820; color: #e7edf5; border-radius: 6px; }
+      label { display: block; margin-top: 10px; font-size: 14px; }
+      input, select, textarea { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px; border: 1px solid #c4ccd8; border-radius: 6px; font: inherit; }
+      button { margin-top: 14px; padding: 8px 18px; border: 0; border-radius: 6px; background: #116b45; color: #fff; font: inherit; cursor: pointer; }
+      button.ghost { background: #4a5568; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+      .result { margin-top: 12px; font-size: 14px; white-space: pre-wrap; }
     </style>
   </head>
   <body>
@@ -21,6 +28,45 @@
       <section class="panel">
         <p>后端状态：<span id="status" class="status">检测中</span></p>
         <pre id="output">{}</pre>
+      </section>
+
+      <section class="panel">
+        <h2>投诉绑定服务记录</h2>
+        <label>访问令牌（Bearer）<input id="token" value="admin-super-token-change-in-production" /></label>
+        <div class="grid">
+          <label>志愿者 ID<input id="cVolunteer" placeholder="volunteer uuid" /></label>
+          <label>服务记录 ID<input id="cRecord" placeholder="service record uuid" /></label>
+        </div>
+        <label>投诉类型
+          <select id="cType">
+            <option value="no_show">爽约</option>
+            <option value="poor_attitude">服务态度差</option>
+            <option value="violation">违规操作</option>
+            <option value="misconduct">不当行为</option>
+            <option value="other">其他</option>
+          </select>
+        </label>
+        <label>投诉描述<textarea id="cDesc" rows="2" placeholder="至少 5 个字符"></textarea></label>
+        <button onclick="submitComplaint()">提交投诉</button>
+        <div id="createResult" class="result"></div>
+      </section>
+
+      <section class="panel">
+        <h2>投诉处理</h2>
+        <label>投诉 ID<input id="hId" placeholder="complaint uuid" /></label>
+        <div class="grid">
+          <label>处理动作
+            <select id="hAction">
+              <option value="resolve">受理（作废记录并撤销原积分）</option>
+              <option value="reject">驳回（仅保留处理意见）</option>
+            </select>
+          </label>
+          <label>处理意见<input id="hResolution" placeholder="至少 5 个字符" /></label>
+        </div>
+        <button onclick="handleComplaint()">提交处理</button>
+        <button class="ghost" onclick="loadComplaint()">刷新投诉详情</button>
+        <div id="handleResult" class="result"></div>
+        <pre id="detail">{}</pre>
       </section>
     </main>
     <script>
@@ -38,6 +84,82 @@
           output.textContent = String(error);
         }
       }
+
+      function authHeaders() {
+        return {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + document.getElementById('token').value.trim(),
+        };
+      }
+
+      async function submitComplaint() {
+        const box = document.getElementById('createResult');
+        const res = await fetch('/api/v1/complaints', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            volunteer_id: document.getElementById('cVolunteer').value.trim(),
+            service_record_id: document.getElementById('cRecord').value.trim(),
+            complaint_type: document.getElementById('cType').value,
+            description: document.getElementById('cDesc').value.trim(),
+          }),
+        });
+        const data = await res.json();
+        box.textContent = JSON.stringify(data, null, 2);
+        if (data.success && data.data && data.data.id) {
+          document.getElementById('hId').value = data.data.id;
+          loadComplaint();
+        }
+      }
+
+      async function handleComplaint() {
+        const id = document.getElementById('hId').value.trim();
+        const box = document.getElementById('handleResult');
+        const res = await fetch('/api/v1/complaints/' + id + '/handle', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            action: document.getElementById('hAction').value,
+            resolution: document.getElementById('hResolution').value.trim(),
+          }),
+        });
+        const data = await res.json();
+        box.textContent = JSON.stringify(data, null, 2);
+        loadComplaint();
+      }
+
+      async function loadComplaint() {
+        const id = document.getElementById('hId').value.trim();
+        const detail = document.getElementById('detail');
+        if (!id) { detail.textContent = '{}'; return; }
+        const res = await fetch('/api/v1/complaints/' + id, { headers: authHeaders() });
+        const data = await res.json();
+        if (data.success && data.data) {
+          const c = data.data;
+          detail.textContent = JSON.stringify({
+            投诉状态: c.status,
+            处理意见: c.resolution,
+            争议记录: c.service_record && {
+              记录ID: c.service_record.id,
+              记录状态: c.service_record.status,
+              作废时间: c.service_record.voided_at,
+              作废原因: c.service_record.void_reason,
+            },
+            撤销结果: {
+              原积分: c.original_points,
+              撤销积分: c.revoked_points,
+              撤销流水: c.revocation && {
+                变动: c.revocation.change_amount,
+                变动前: c.revocation.before_points,
+                变动后: c.revocation.after_points,
+              },
+            },
+          }, null, 2);
+        } else {
+          detail.textContent = JSON.stringify(data, null, 2);
+        }
+      }
+
       probe('/api/health', '健康检查');
       probe('/api/v1/service-types', '服务类型接口');
     </script>

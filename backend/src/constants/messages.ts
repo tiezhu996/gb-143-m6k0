@@ -47,8 +47,14 @@ export const messages = {
     notFound: '投诉不存在',
     alreadyHandled: '该投诉已处理',
     rejected: '投诉已驳回',
-    resolved: '投诉已处理',
+    resolved: '投诉已受理，关联服务记录已作废并撤销原积分',
     handleFailed: '处理投诉失败',
+    createFailed: '创建投诉失败',
+    recordNotFound: '投诉绑定的服务记录不存在',
+    recordNotBelong: '该服务记录不属于该志愿者',
+    recordTooOld: '只能投诉近七天内的服务记录',
+    recordAlreadyComplained: '该服务记录已被投诉，请勿重复提交',
+    recordAlreadyVoided: '该服务记录已作废，无法投诉',
   },
   admin: {
     adjustPointsFailed: '调整积分失败',
@@ -59,6 +65,7 @@ export const messages = {
   logs: {
     createServiceRecordFailed: '创建服务记录失败',
     deleteServiceRecordFailed: '删除服务记录失败',
+    createComplaintFailed: '创建投诉失败',
     handleComplaintFailed: '处理投诉失败',
     adjustPointsFailed: '调整积分失败',
     adjustCreditFailed: '调整信用分失败',

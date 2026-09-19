@@ -40,6 +40,10 @@ const createTables = async (): Promise<void> => {
         is_no_show BOOLEAN NOT NULL DEFAULT false,
         location VARCHAR(200),
         description TEXT,
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        voided_at TIMESTAMP,
+        void_reason TEXT,
+        voided_by_complaint_id UUID,
         recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -68,6 +72,7 @@ const createTables = async (): Promise<void> => {
       CREATE TABLE IF NOT EXISTS complaints (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         volunteer_id UUID NOT NULL REFERENCES volunteers(id) ON DELETE CASCADE,
+        service_record_id UUID REFERENCES service_records(id),
         complainant_id UUID,
         complaint_type VARCHAR(50) NOT NULL,
         description TEXT NOT NULL,
@@ -75,6 +80,8 @@ const createTables = async (): Promise<void> => {
         resolution TEXT,
         credit_penalty INTEGER DEFAULT 0,
         points_penalty INTEGER DEFAULT 0,
+        original_points INTEGER,
+        revoked_points INTEGER,
         handled_by VARCHAR(100),
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         resolved_at TIMESTAMP
@@ -82,6 +89,21 @@ const createTables = async (): Promise<void> => {
 
       CREATE INDEX IF NOT EXISTS idx_complaints_volunteer_id ON complaints(volunteer_id);
       CREATE INDEX IF NOT EXISTS idx_complaints_status ON complaints(status);
+    `);
+
+    await client.query(`
+      ALTER TABLE service_records ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
+      ALTER TABLE service_records ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP;
+      ALTER TABLE service_records ADD COLUMN IF NOT EXISTS void_reason TEXT;
+      ALTER TABLE service_records ADD COLUMN IF NOT EXISTS voided_by_complaint_id UUID;
+
+      ALTER TABLE complaints ADD COLUMN IF NOT EXISTS service_record_id UUID REFERENCES service_records(id);
+      ALTER TABLE complaints ADD COLUMN IF NOT EXISTS original_points INTEGER;
+      ALTER TABLE complaints ADD COLUMN IF NOT EXISTS revoked_points INTEGER;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_complaints_service_record_id_unique
+        ON complaints(service_record_id) WHERE service_record_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_service_records_status ON service_records(status);
     `);
 
     await client.query(`

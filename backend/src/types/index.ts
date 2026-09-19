@@ -52,6 +52,10 @@ export interface ServiceRecord {
   is_no_show?: boolean;
   location?: string;
   description?: string;
+  status?: 'active' | 'voided';
+  voided_at?: Date;
+  void_reason?: string;
+  voided_by_complaint_id?: string;
   recorded_at?: Date;
   created_at?: Date;
   updated_at?: Date;
@@ -83,6 +87,7 @@ export interface Badge {
 export interface Complaint {
   id: string;
   volunteer_id: string;
+  service_record_id?: string;
   complainant_id?: string;
   complaint_type: string;
   description: string;
@@ -90,9 +95,16 @@ export interface Complaint {
   resolution?: string;
   credit_penalty?: number;
   points_penalty?: number;
+  original_points?: number;
+  revoked_points?: number;
   handled_by?: string;
   created_at: Date;
   resolved_at?: Date;
+}
+
+export interface ComplaintDetail extends Complaint {
+  service_record?: ServiceRecord | null;
+  revocation?: PointsLog | null;
 }
 
 export interface CreditLog {

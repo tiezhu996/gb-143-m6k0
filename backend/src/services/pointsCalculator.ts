@@ -20,29 +20,3 @@ export const calculatePoints = (
 export const calculateNoShowPenalty = (): number => {
   return 20;
 };
-
-export const calculateComplaintPenalty = (
-  complaintType: string,
-  severity: number = 1
-): { creditPenalty: number; pointsPenalty: number } => {
-  const baseCreditPenalty: Record<string, number> = {
-    'no_show': 15,
-    'poor_attitude': 10,
-    'violation': 20,
-    'misconduct': 25,
-    'other': 5,
-  };
-
-  const basePointsPenalty: Record<string, number> = {
-    'no_show': 30,
-    'poor_attitude': 15,
-    'violation': 25,
-    'misconduct': 35,
-    'other': 10,
-  };
-
-  const creditPenalty = (baseCreditPenalty[complaintType] || 5) * severity;
-  const pointsPenalty = (basePointsPenalty[complaintType] || 10) * severity;
-
-  return { creditPenalty, pointsPenalty };
-};

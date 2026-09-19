@@ -180,13 +180,27 @@ const runTests = async (): Promise<void> => {
 
     if (complaintVolunteerId) {
       console.log('\n--- 用例4.1: 创建投诉后信用分降低 ---');
+      const complaintService = await createServiceRecord({
+        volunteer_id: complaintVolunteerId,
+        service_type: 'elderly_care',
+        duration_hours: 2,
+        rating: 4,
+        description: '信用分测试-被投诉服务',
+      });
+      assert('被投诉服务记录创建成功', complaintService.success === true, '服务记录创建失败', complaintService);
+      const complaintRecordId = complaintService.data?.record?.id;
+      const earnedPoints = complaintService.data?.record?.points_earned ?? 0;
+      assert('服务记录获得积分', earnedPoints > 0, `应获得积分，实际: ${earnedPoints}`, complaintService.data?.record);
+
       const complaint1 = await createComplaint(
         complaintVolunteerId,
+        complaintRecordId!,
         'poor_attitude',
         '服务态度不好，测试用例',
         undefined
       );
       assert('投诉创建成功', complaint1.success === true, '投诉创建失败', complaint1);
+      const complaint1Id = complaint1.data?.id as string;
 
       const complaintCredit = complaint1.data?.creditScore;
       const complaintChange = complaint1.data?.creditChange ?? 0;
@@ -206,9 +220,20 @@ const runTests = async (): Promise<void> => {
       assert('分解中活跃投诉数为1', complaintBreakdown?.details?.activeComplaintCount === 1,
         `分解中活跃投诉数应为1，实际: ${complaintBreakdown?.details?.activeComplaintCount}`, complaintBreakdown?.details);
 
-      console.log('\n--- 用例4.3: 处理投诉(驳回)后信用分恢复 ---');
+      console.log('\n--- 用例4.3: 同一记录重复投诉被拒绝 ---');
+      const duplicateComplaint = await createComplaint(
+        complaintVolunteerId,
+        complaintRecordId!,
+        'misconduct',
+        '重复投诉同一记录',
+        undefined
+      );
+      assert('重复投诉被拒绝', duplicateComplaint.success === false,
+        '同一记录只保留一条投诉，重复提交应失败', duplicateComplaint);
+
+      console.log('\n--- 用例4.4: 处理投诉(驳回)后信用分恢复 ---');
       const handleReject = await handleComplaint(
-        complaint1.data?.id!,
+        complaint1Id,
         'reject',
         'test-admin',
         '投诉不成立，测试驳回'
@@ -220,32 +245,66 @@ const runTests = async (): Promise<void> => {
       assert('驳回后信用分增加', rejectChange > 0,
         `驳回投诉应增加信用分，变化量: ${rejectChange}`, { credit_change: rejectChange });
 
-      console.log('\n--- 用例4.4: 创建新投诉并处理(支持) ---');
+      console.log('\n--- 用例4.5: 受理投诉作废记录并撤销原积分 ---');
+      const complaintService2 = await createServiceRecord({
+        volunteer_id: complaintVolunteerId,
+        service_type: 'education',
+        duration_hours: 3,
+        rating: 5,
+        description: '信用分测试-被受理投诉服务',
+      });
+      const complaintRecordId2 = complaintService2.data?.record?.id;
+      const earnedPoints2 = complaintService2.data?.record?.points_earned ?? 0;
+
       const complaint2 = await createComplaint(
         complaintVolunteerId,
+        complaintRecordId2!,
         'no_show',
         '爽约投诉，测试用例',
         undefined
       );
       assert('第二个投诉创建成功', complaint2.success === true, '第二个投诉创建失败', complaint2);
+      const complaint2Id = complaint2.data?.id as string;
+
+      const beforeResolve = await getVolunteerById(complaintVolunteerId);
+      const pointsBeforeResolve = beforeResolve.data?.total_points ?? 0;
 
       const handleResolve = await handleComplaint(
-        complaint2.data?.id!,
+        complaint2Id,
         'resolve',
         'test-admin',
-        '投诉成立，扣除积分和信用分',
-        1
+        '投诉成立，作废记录并撤销积分'
       );
-      assert('投诉处理成功', handleResolve.success === true, '投诉处理失败', handleResolve);
-      assert('返回积分扣除', handleResolve.data?.pointsPenalty > 0,
-        `应返回积分扣除，实际: ${handleResolve.data?.pointsPenalty}`, handleResolve.data);
+      assert('投诉受理成功', handleResolve.success === true, '投诉受理失败', handleResolve);
+      assert('撤销积分等于原所得积分', handleResolve.data?.revokedPoints === earnedPoints2,
+        `应撤销${earnedPoints2}分，实际: ${handleResolve.data?.revokedPoints}`, handleResolve.data);
       assert('返回信用分变化', handleResolve.data?.creditChange !== undefined,
         '应返回信用分变化', handleResolve.data);
 
       const volunteerAfterResolve = await getVolunteerById(complaintVolunteerId);
+      const pointsAfterResolve = volunteerAfterResolve.data?.total_points ?? 0;
+      assert('累计积分一次性扣减原积分', pointsAfterResolve === Math.max(0, pointsBeforeResolve - earnedPoints2),
+        `期望${Math.max(0, pointsBeforeResolve - earnedPoints2)}分，实际${pointsAfterResolve}分`,
+        { before: pointsBeforeResolve, after: pointsAfterResolve, revoked: earnedPoints2 });
+
       const resolveCreditScore = volunteerAfterResolve.data?.credit_score ?? 100;
       assert('处理后信用分低于创建投诉前', resolveCreditScore < 100,
         `期望<100分，实际${resolveCreditScore}分`, volunteerAfterResolve.data);
+
+      console.log('\n--- 用例4.6: 重复受理不生效且不改积分 ---');
+      const handleResolveAgain = await handleComplaint(
+        complaint2Id,
+        'resolve',
+        'test-admin',
+        '重复受理，应被拒绝'
+      );
+      assert('重复受理被拒绝', handleResolveAgain.success === false,
+        '已处理的投诉不能重复受理', handleResolveAgain);
+
+      const volunteerAfterDuplicate = await getVolunteerById(complaintVolunteerId);
+      assert('重复受理后积分不变', volunteerAfterDuplicate.data?.total_points === pointsAfterResolve,
+        `积分应保持${pointsAfterResolve}分，实际${volunteerAfterDuplicate.data?.total_points}分`,
+        volunteerAfterDuplicate.data);
     }
 
     console.log('\n========================================');

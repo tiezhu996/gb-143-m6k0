@@ -1,13 +1,15 @@
-import { ApiResponse, Complaint, ComplaintWithCredit, CreditScoreResult } from '../types';
+import { ApiResponse, Complaint, ComplaintDetail, ComplaintWithCredit, Volunteer } from '../types';
 import pool from '../db/pool';
-import { calculateComplaintPenalty } from './pointsCalculator';
 import { logCreditChange, recalculateCreditScore } from './creditService';
-import { calculateLevel, checkNewBadges } from './badgeService';
+import { calculateLevel } from './badgeService';
 import { logger } from '../utils/logger';
 import { messages } from '../constants/messages';
 
+const COMPLAINT_WINDOW_DAYS = 7;
+
 export const createComplaint = async (
   volunteerId: string,
+  serviceRecordId: string,
   complaintType: string,
   description: string,
   complainantId?: string
@@ -15,23 +17,69 @@ export const createComplaint = async (
   const client = await pool.connect();
 
   try {
+    await client.query('BEGIN');
+
     const volunteerResult = await client.query(
-      'SELECT * FROM volunteers WHERE id = $1',
+      'SELECT id FROM volunteers WHERE id = $1',
       [volunteerId]
     );
 
     if (volunteerResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       return { success: false, error: messages.volunteers.notFound };
     }
 
+    const recordResult = await client.query(
+      `SELECT id, volunteer_id, points_earned, status, recorded_at,
+              (recorded_at >= NOW() - INTERVAL '1 day' * $2) AS within_seven_days
+       FROM service_records
+       WHERE id = $1
+       FOR UPDATE`,
+      [serviceRecordId, COMPLAINT_WINDOW_DAYS]
+    );
+
+    if (recordResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { success: false, error: messages.complaints.recordNotFound };
+    }
+
+    const record = recordResult.rows[0];
+
+    if (record.volunteer_id !== volunteerId) {
+      await client.query('ROLLBACK');
+      return { success: false, error: messages.complaints.recordNotBelong };
+    }
+
+    if (record.status !== 'active') {
+      await client.query('ROLLBACK');
+      return { success: false, error: messages.complaints.recordAlreadyVoided };
+    }
+
+    if (!record.within_seven_days) {
+      await client.query('ROLLBACK');
+      return { success: false, error: messages.complaints.recordTooOld };
+    }
+
+    const existingResult = await client.query(
+      'SELECT id FROM complaints WHERE service_record_id = $1',
+      [serviceRecordId]
+    );
+
+    if (existingResult.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return { success: false, error: messages.complaints.recordAlreadyComplained };
+    }
+
     const result = await client.query(
-      `INSERT INTO complaints (volunteer_id, complainant_id, complaint_type, description)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO complaints (volunteer_id, service_record_id, complainant_id, complaint_type, description)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [volunteerId, complainantId, complaintType, description]
+      [volunteerId, serviceRecordId, complainantId, complaintType, description]
     );
 
     const newComplaint = result.rows[0];
+
+    await client.query('COMMIT');
 
     const creditResult = await recalculateCreditScore(volunteerId);
     if (creditResult && creditResult.changeAmount !== 0) {
@@ -55,6 +103,13 @@ export const createComplaint = async (
         creditBreakdown: creditResult?.breakdown,
       },
     };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if ((error as { code?: string })?.code === '23505') {
+      return { success: false, error: messages.complaints.recordAlreadyComplained };
+    }
+    logger.error(messages.logs.createComplaintFailed, error);
+    return { success: false, error: messages.complaints.createFailed };
   } finally {
     client.release();
   }
@@ -122,8 +177,7 @@ export const handleComplaint = async (
   complaintId: string,
   action: 'resolve' | 'reject',
   handledBy: string,
-  resolution: string,
-  severity: number = 1
+  resolution: string
 ): Promise<ApiResponse<any>> => {
   const client = await pool.connect();
 
@@ -142,18 +196,19 @@ export const handleComplaint = async (
 
     const complaint = complaintResult.rows[0] as Complaint;
 
-    if (complaint.status !== 'pending') {
-      await client.query('ROLLBACK');
-      return { success: false, error: messages.complaints.alreadyHandled };
-    }
-
     if (action === 'reject') {
-      await client.query(
+      const rejectResult = await client.query(
         `UPDATE complaints
          SET status = 'rejected', resolution = $1, handled_by = $2, resolved_at = CURRENT_TIMESTAMP
-         WHERE id = $3`,
+         WHERE id = $3 AND status = 'pending'
+         RETURNING *`,
         [resolution, handledBy, complaintId]
       );
+
+      if (rejectResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, error: messages.complaints.alreadyHandled };
+      }
 
       await client.query('COMMIT');
 
@@ -181,13 +236,57 @@ export const handleComplaint = async (
       };
     }
 
-    const { creditPenalty, pointsPenalty } = calculateComplaintPenalty(
-      complaint.complaint_type,
-      severity
+    if (!complaint.service_record_id) {
+      await client.query('ROLLBACK');
+      return { success: false, error: messages.complaints.recordNotFound };
+    }
+
+    const claimResult = await client.query(
+      `UPDATE complaints
+       SET status = 'resolved', resolution = $1, handled_by = $2, resolved_at = CURRENT_TIMESTAMP
+       WHERE id = $3 AND status = 'pending'
+       RETURNING *`,
+      [resolution, handledBy, complaintId]
     );
 
+    if (claimResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { success: false, error: messages.complaints.alreadyHandled };
+    }
+
+    const recordResult = await client.query(
+      `SELECT id, volunteer_id, points_earned, status, service_type
+       FROM service_records
+       WHERE id = $1
+       FOR UPDATE`,
+      [complaint.service_record_id]
+    );
+
+    if (recordResult.rows.length === 0 || recordResult.rows[0].status !== 'active') {
+      await client.query('ROLLBACK');
+      return { success: false, error: messages.complaints.recordAlreadyVoided };
+    }
+
+    const record = recordResult.rows[0];
+    const originalPoints = record.points_earned || 0;
+
+    const voidResult = await client.query(
+      `UPDATE service_records
+       SET status = 'voided',
+           voided_at = CURRENT_TIMESTAMP,
+           void_reason = $1,
+           voided_by_complaint_id = $2
+       WHERE id = $3 AND status = 'active'`,
+      [`投诉受理作废: ${resolution}`, complaintId, record.id]
+    );
+
+    if (voidResult.rowCount !== 1) {
+      await client.query('ROLLBACK');
+      return { success: false, error: messages.complaints.recordAlreadyVoided };
+    }
+
     const volunteerResult = await client.query(
-      'SELECT * FROM volunteers WHERE id = $1',
+      'SELECT * FROM volunteers WHERE id = $1 FOR UPDATE',
       [complaint.volunteer_id]
     );
 
@@ -196,9 +295,10 @@ export const handleComplaint = async (
       return { success: false, error: messages.volunteers.notFound };
     }
 
-    const volunteer = volunteerResult.rows[0];
-
-    const newTotalPoints = Math.max(0, volunteer.total_points - pointsPenalty);
+    const volunteer = volunteerResult.rows[0] as Volunteer;
+    const beforePoints = volunteer.total_points;
+    const newTotalPoints = Math.max(0, beforePoints - originalPoints);
+    const revokedPoints = beforePoints - newTotalPoints;
     const newLevel = calculateLevel(newTotalPoints);
 
     await client.query(
@@ -210,27 +310,27 @@ export const handleComplaint = async (
 
     await client.query(
       `INSERT INTO points_logs (volunteer_id, change_amount, reason, before_points, after_points, related_id, related_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [volunteer.id, -pointsPenalty, `投诉处理扣分: ${complaint.complaint_type}`, volunteer.total_points, newTotalPoints, complaintId, 'complaint']
+       VALUES ($1, $2, $3, $4, $5, $6, 'complaint')`,
+      [volunteer.id, -revokedPoints, `投诉受理撤销积分: ${complaint.complaint_type}`, beforePoints, newTotalPoints, complaintId]
     );
 
     await client.query(
       `UPDATE complaints
-       SET status = 'resolved',
-           resolution = $1,
-           credit_penalty = $2,
-           points_penalty = $3,
-           handled_by = $4,
-           resolved_at = CURRENT_TIMESTAMP
-       WHERE id = $5`,
-      [resolution, creditPenalty, pointsPenalty, handledBy, complaintId]
+       SET original_points = $1, revoked_points = $2, points_penalty = $2
+       WHERE id = $3`,
+      [originalPoints, revokedPoints, complaintId]
     );
 
     await client.query(
       `INSERT INTO admin_audit_logs (admin_id, action, target_type, target_id, new_value, reason)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [handledBy, 'resolve_complaint', 'complaint', complaintId,
-       { creditPenalty, pointsPenalty }, resolution]
+       VALUES ($1, 'resolve_complaint', 'complaint', $2, $3, $4)`,
+      [handledBy, complaintId, {
+        serviceRecordId: record.id,
+        originalPoints,
+        revokedPoints,
+        beforePoints,
+        afterPoints: newTotalPoints,
+      }, resolution]
     );
 
     await client.query('COMMIT');
@@ -240,7 +340,7 @@ export const handleComplaint = async (
       await logCreditChange(
         complaint.volunteer_id,
         creditResult.changeAmount,
-        `投诉处理-信用分重算: ${complaint.complaint_type}`,
+        `投诉受理-信用分重算: ${complaint.complaint_type}`,
         creditResult.beforeScore,
         creditResult.afterScore,
         complaintId,
@@ -252,8 +352,10 @@ export const handleComplaint = async (
       success: true,
       data: {
         message: messages.complaints.resolved,
-        creditPenalty,
-        pointsPenalty,
+        serviceRecordId: record.id,
+        originalPoints,
+        revokedPoints,
+        beforePoints,
         newTotalPoints,
         newLevel,
         creditScore: creditResult?.afterScore,
@@ -272,12 +374,15 @@ export const handleComplaint = async (
 
 export const getComplaintById = async (
   complaintId: string
-): Promise<ApiResponse<Complaint>> => {
+): Promise<ApiResponse<ComplaintDetail>> => {
   const client = await pool.connect();
 
   try {
     const result = await client.query(
-      'SELECT * FROM complaints WHERE id = $1',
+      `SELECT c.*, row_to_json(sr) AS service_record
+       FROM complaints c
+       LEFT JOIN service_records sr ON sr.id = c.service_record_id
+       WHERE c.id = $1`,
       [complaintId]
     );
 
@@ -285,7 +390,24 @@ export const getComplaintById = async (
       return { success: false, error: messages.complaints.notFound };
     }
 
-    return { success: true, data: result.rows[0] };
+    const complaint = result.rows[0];
+
+    const revocationResult = await client.query(
+      `SELECT * FROM points_logs
+       WHERE related_id = $1 AND related_type = 'complaint'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [complaintId]
+    );
+
+    return {
+      success: true,
+      data: {
+        ...complaint,
+        service_record: complaint.service_record || null,
+        revocation: revocationResult.rows[0] || null,
+      },
+    };
   } finally {
     client.release();
   }
