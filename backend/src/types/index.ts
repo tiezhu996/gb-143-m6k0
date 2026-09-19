@@ -50,6 +50,8 @@ export interface ServiceRecord {
   rating: number;
   points_earned?: number;
   is_no_show?: boolean;
+  is_void?: boolean;
+  voided_by_complaint_id?: string;
   location?: string;
   description?: string;
   recorded_at?: Date;
@@ -84,6 +86,10 @@ export interface Complaint {
   id: string;
   volunteer_id: string;
   complainant_id?: string;
+  service_record_id: string;
+  original_points: number;
+  revoked_points: number;
+  revocation_result?: string;
   complaint_type: string;
   description: string;
   status: 'pending' | 'resolved' | 'rejected';
@@ -93,6 +99,22 @@ export interface Complaint {
   handled_by?: string;
   created_at: Date;
   resolved_at?: Date;
+}
+
+export interface ComplaintRevocationResult {
+  complaintId: string;
+  serviceRecordId: string;
+  volunteerId: string;
+  originalPoints: number;
+  revokedPoints: number;
+  beforePoints: number;
+  afterPoints: number;
+  result: string;
+}
+
+export interface ComplaintDetail extends Complaint {
+  service_record?: ServiceRecord;
+  revocation?: ComplaintRevocationResult | null;
 }
 
 export interface CreditLog {

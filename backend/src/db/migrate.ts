@@ -69,6 +69,10 @@ const createTables = async (): Promise<void> => {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         volunteer_id UUID NOT NULL REFERENCES volunteers(id) ON DELETE CASCADE,
         complainant_id UUID,
+        service_record_id UUID REFERENCES service_records(id) ON DELETE SET NULL,
+        original_points INTEGER NOT NULL DEFAULT 0,
+        revoked_points INTEGER NOT NULL DEFAULT 0,
+        revocation_result TEXT,
         complaint_type VARCHAR(50) NOT NULL,
         description TEXT NOT NULL,
         status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'resolved', 'rejected')),
@@ -82,6 +86,47 @@ const createTables = async (): Promise<void> => {
 
       CREATE INDEX IF NOT EXISTS idx_complaints_volunteer_id ON complaints(volunteer_id);
       CREATE INDEX IF NOT EXISTS idx_complaints_status ON complaints(status);
+      CREATE INDEX IF NOT EXISTS idx_complaints_service_record_id ON complaints(service_record_id);
+    `);
+
+    // 投诉必须绑定具体服务记录：对历史库做幂等升级（全新库上面已带列）。
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'complaints' AND column_name = 'service_record_id') THEN
+          ALTER TABLE complaints ADD COLUMN service_record_id UUID REFERENCES service_records(id) ON DELETE SET NULL;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'complaints' AND column_name = 'original_points') THEN
+          ALTER TABLE complaints ADD COLUMN original_points INTEGER NOT NULL DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'complaints' AND column_name = 'revoked_points') THEN
+          ALTER TABLE complaints ADD COLUMN revoked_points INTEGER NOT NULL DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'complaints' AND column_name = 'revocation_result') THEN
+          ALTER TABLE complaints ADD COLUMN revocation_result TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'service_records' AND column_name = 'is_void') THEN
+          ALTER TABLE service_records ADD COLUMN is_void BOOLEAN NOT NULL DEFAULT false;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'service_records' AND column_name = 'voided_by_complaint_id') THEN
+          ALTER TABLE service_records ADD COLUMN voided_by_complaint_id UUID REFERENCES complaints(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+
+      -- 同一服务记录只允许存在一条待处理投诉；已结案的历史投诉不受限。
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_complaints_pending_per_record
+        ON complaints(service_record_id)
+        WHERE status = 'pending';
+
+      CREATE INDEX IF NOT EXISTS idx_service_records_void
+        ON service_records(is_void)
+        WHERE is_void = true;
     `);
 
     await client.query(`

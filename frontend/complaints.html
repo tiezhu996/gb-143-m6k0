@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>志愿者投诉处理 · 服务记录绑定</title>
+    <link rel="stylesheet" href="./complaints.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <h1>志愿者投诉处理</h1>
+        <p class="subtitle">投诉必须绑定近七天内的具体服务记录；受理将作废记录并一次性撤销其原所得积分。</p>
+        <div class="auth-bar">
+          <label>管理员令牌
+            <input id="admin-token" type="password" placeholder="Bearer Token" value="admin-token" />
+          </label>
+          <span id="api-status" class="api-status">未连接</span>
+        </div>
+      </header>
+
+      <section class="panel">
+        <h2>第一步：选择志愿者并加载近七天服务记录</h2>
+        <div class="form-row">
+          <label>志愿者ID
+            <input id="volunteer-id" type="text" placeholder="UUID" />
+          </label>
+          <button id="btn-load" class="btn btn-primary" type="button">加载服务记录与投诉</button>
+        </div>
+        <p class="hint">仅可对属于该志愿者、发生在近七天内、且此前未被投诉的记录发起投诉。</p>
+        <div id="records" class="record-list" aria-live="polite"></div>
+      </section>
+
+      <section class="panel">
+        <h2>第二步：填写投诉内容</h2>
+        <form id="complaint-form" class="complaint-form">
+          <input type="hidden" id="service-record-id" />
+          <div id="selected-record" class="selected-record">尚未选择服务记录</div>
+          <label>投诉类型
+            <select id="complaint-type">
+              <option value="no_show">爽约</option>
+              <option value="poor_attitude">态度恶劣</option>
+              <option value="violation">违规操作</option>
+              <option value="misconduct">不当行为</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+          <label>投诉说明（不少于5个字）
+            <textarea id="complaint-description" rows="3" placeholder="请描述投诉事实"></textarea>
+          </label>
+          <button class="btn btn-primary" type="submit">提交投诉</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>投诉列表与处理</h2>
+        <div class="filter-row">
+          <label>状态筛选
+            <select id="status-filter">
+              <option value="">全部</option>
+              <option value="pending">待处理</option>
+              <option value="resolved">已受理</option>
+              <option value="rejected">已驳回</option>
+            </select>
+          </label>
+          <button id="btn-refresh" class="btn" type="button">刷新</button>
+        </div>
+        <div id="complaints" class="complaint-list" aria-live="polite"></div>
+      </section>
+
+      <!-- 投诉详情抽屉：刷新后仍可读到争议记录与撤销结果 -->
+      <div id="detail-mask" class="detail-mask hidden">
+        <aside class="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+          <div class="detail-head">
+            <h2 id="detail-title">投诉详情</h2>
+            <button id="btn-close-detail" class="btn btn-close" type="button">关闭</button>
+          </div>
+          <div id="detail-body" class="detail-body"></div>
+        </aside>
+      </div>
+
+      <div id="toast" class="toast hidden"></div>
+    </main>
+    <script src="./complaints.js"></script>
+  </body>
+</html>

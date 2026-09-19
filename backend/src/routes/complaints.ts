@@ -17,6 +17,7 @@ router.post('/', validateRequest(complaintSchema), async (req: Request, res: Res
       req.body.volunteer_id,
       req.body.complaint_type,
       req.body.description,
+      req.body.service_record_id,
       req.body.complainant_id
     );
     const statusCode = result.success ? 201 : 400;
@@ -56,8 +57,7 @@ router.post('/:id/handle', validateRequest(handleComplaintSchema), async (req: A
       req.params.id,
       req.body.action,
       handledBy,
-      req.body.resolution,
-      req.body.severity
+      req.body.resolution
     );
     const statusCode = result.success ? 200 : 400;
     res.status(statusCode).json(result);
